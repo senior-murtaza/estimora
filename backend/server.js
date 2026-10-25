@@ -1,4 +1,3 @@
-
 require("dotenv").config();
 
 const express = require("express");
@@ -39,6 +38,7 @@ const ContactMessage = mongoose.model("ContactMessage", messageSchema);
 
 const categories = ["development", "design", "maintenance"];
 
+// Initial services for an empty database
 const initialServices = [
   {
     id: 1,
@@ -46,7 +46,8 @@ const initialServices = [
     category: "development",
     hourlyRateAFN: 800,
     offered: true,
-    description: "Build a responsive website for a business or personal brand.",
+    description:
+      "Build a responsive website for a business or personal brand.",
   },
   {
     id: 2,
@@ -66,6 +67,31 @@ const initialServices = [
   },
 ];
 
+// Reuse the MongoDB connection across requests
+let databaseConnection = null;
+
+async function connectDatabase() {
+  if (mongoose.connection.readyState === 1) {
+    return;
+  }
+
+  if (!process.env.MONGODB_URI) {
+    throw new Error("MONGODB_URI environment variable is missing.");
+  }
+
+  if (!databaseConnection) {
+    databaseConnection = mongoose
+      .connect(process.env.MONGODB_URI)
+      .catch((error) => {
+        databaseConnection = null;
+        throw error;
+      });
+  }
+
+  await databaseConnection;
+}
+
+// Validation helpers
 function validateService(body) {
   const { title, category, hourlyRateAFN, description, offered } = body ?? {};
 
@@ -86,11 +112,16 @@ function validateMessage(body) {
   const { firstName, lastName, email, subject, message } = body ?? {};
 
   if (
-    typeof firstName !== "string" || !firstName.trim() ||
-    typeof lastName !== "string" || !lastName.trim() ||
-    typeof email !== "string" || !email.trim() ||
-    typeof subject !== "string" || !subject.trim() ||
-    typeof message !== "string" || !message.trim()
+    typeof firstName !== "string" ||
+    !firstName.trim() ||
+    typeof lastName !== "string" ||
+    !lastName.trim() ||
+    typeof email !== "string" ||
+    !email.trim() ||
+    typeof subject !== "string" ||
+    !subject.trim() ||
+    typeof message !== "string" ||
+    !message.trim()
   ) {
     return "Please fill in all fields.";
   }
@@ -110,7 +141,10 @@ app.get("/", (req, res) => {
 // Get all services
 app.get("/api/services", async (req, res) => {
   try {
+    await connectDatabase();
+
     const services = await Service.find().sort({ id: 1 }).lean();
+
     res.json(services);
   } catch (error) {
     console.error("Get services failed:", error.message);
@@ -121,6 +155,8 @@ app.get("/api/services", async (req, res) => {
 // Add a service
 app.post("/api/services", async (req, res) => {
   try {
+    await connectDatabase();
+
     if (!validateService(req.body)) {
       return res.status(400).json({
         message: "Invalid service information.",
@@ -149,6 +185,8 @@ app.post("/api/services", async (req, res) => {
 // Update a service
 app.put("/api/services/:id", async (req, res) => {
   try {
+    await connectDatabase();
+
     const id = Number(req.params.id);
 
     if (!Number.isSafeInteger(id) || id < 1) {
@@ -187,6 +225,8 @@ app.put("/api/services/:id", async (req, res) => {
 // Delete a service
 app.delete("/api/services/:id", async (req, res) => {
   try {
+    await connectDatabase();
+
     const id = Number(req.params.id);
 
     if (!Number.isSafeInteger(id) || id < 1) {
@@ -206,9 +246,11 @@ app.delete("/api/services/:id", async (req, res) => {
   }
 });
 
-// Receive and persist contact messages
+// Receive and save contact messages
 app.post("/api/messages", async (req, res) => {
   try {
+    await connectDatabase();
+
     const validationError = validateMessage(req.body);
 
     if (validationError) {
@@ -234,36 +276,38 @@ app.post("/api/messages", async (req, res) => {
     });
   } catch (error) {
     console.error("Save contact message failed:", error.message);
+
     res.status(500).json({
       message: "Could not save your message. Please try again.",
     });
   }
 });
 
-// Seed the initial services only if the collection is empty
-async function startServer() {
-  try {
-    if (!process.env.MONGODB_URI) {
-      throw new Error("MONGODB_URI is missing from the .env file.");
+// Local development startup and initial seeding
+if (require.main === module) {
+  async function startServer() {
+    try {
+      await connectDatabase();
+      console.log("Connected to MongoDB successfully.");
+
+      const serviceCount = await Service.countDocuments();
+
+      if (serviceCount === 0) {
+        await Service.insertMany(initialServices);
+        console.log("Initial services added to MongoDB.");
+      }
+
+      app.listen(PORT, () => {
+        console.log(`Estimora backend running at http://localhost:${PORT}`);
+      });
+    } catch (error) {
+      console.error("Backend startup failed:", error.message);
+      process.exit(1);
     }
-
-    await mongoose.connect(process.env.MONGODB_URI);
-    console.log("Connected to MongoDB successfully.");
-
-    const serviceCount = await Service.countDocuments();
-
-    if (serviceCount === 0) {
-      await Service.insertMany(initialServices);
-      console.log("Initial services added to MongoDB.");
-    }
-
-    app.listen(PORT, () => {
-      console.log(`Estimora backend running at http://localhost:${PORT}`);
-    });
-  } catch (error) {
-    console.error("Backend startup failed:", error.message);
-    process.exit(1);
   }
+
+  startServer();
 }
 
-startServer();
+// Export the Express app for Vercel
+module.exports = app;
